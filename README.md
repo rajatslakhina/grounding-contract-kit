@@ -10,7 +10,7 @@ iOS 27 made local RAG two lines of Swift. `SpotlightSearchTool` plugs a `Languag
 - What happens to the ones that aren't?
 - How do you know your checker works?
 
-This package is the answer to those three questions, and it needs no model to run — which is why its behaviour is verified on Linux CI, in 88 tests, with zero ML weights.
+This package is the answer to those three questions, and it needs no model to run — which is why its behaviour is verified on Linux CI, in 95 tests, with zero ML weights.
 
 ---
 
@@ -29,7 +29,7 @@ So the scorer has **two asymmetric channels**:
 | 1 | **Prose** | Share of the claim's IDF-weighted mass present in the evidence | Raise the score |
 | 2 | **Literal** | Every number and identifier in the claim, matched *exactly* against the evidence being credited | Only ever **veto**, to zero |
 
-Channel 2 can see nothing but figures. Channel 1 cannot see figures at all. Neither is sufficient; the veto ordering is the contract's sharpest edge.
+Channel 2 can see nothing but figures. Channel 1 sees a figure only as one more token — which is precisely the problem, and worth being exact about rather than sloganeering: for "…under a **64 MB** byte budget" against a corpus saying 48 MB, the prose channel scores **0.767**. The eight matching words carry it; the single wrong number costs it one term's worth of IDF mass and nothing more. 0.767 clears the default 0.6 threshold comfortably. That is the whole argument: prose similarity does not fail on a fabricated figure, it *barely notices*. Only a channel that can veto outright will stop it — and `testNumericGuardIsLoadBearingNotDecorative` pins exactly this, asserting the same claim is `supported` with the literal channel off and `unsupported` with it on.
 
 Measured, from `GroundingContractEngineTests` against the package's own fixture corpus:
 
@@ -98,7 +98,9 @@ Every box is a protocol or a value type. Scoring is **pure and synchronous** —
 
 **`weaklySupported` is reported but not shippable.** Two thresholds, not one, because "we barely missed" and "we were nowhere near" are different operational signals — and collapsing them loses the one number that tells you whether to tune the threshold or fix retrieval. Weak still fails the contract.
 
-**Evidence composition is on by default, and it is a real trade-off.** `allowsEvidenceComposition` lets a claim accumulate coverage across up to three units, which is necessary for multi-hop claims — and also accepts a claim stitched from fragments that never co-occurred, which is a genuine fabrication mode. `GroundingPolicy.regulated` turns it off. The trade-off is named rather than hidden.
+**Evidence composition is on by default, and it is a real trade-off.** `allowsEvidenceComposition` lets a claim accumulate coverage across up to three units, which is necessary for multi-hop claims — and also accepts a claim stitched from fragments that never co-occurred, which is a genuine fabrication mode. Turning it off halves the score on a genuinely two-hop claim (measured: 1.000 → 0.500), which is the cost.
+
+There is one hard invariant here, learned the embarrassing way: `minimumDistinctSources > 1` **forces composition on**, and the initialiser overrides the caller to make it so. Only credited units contribute a source, and without composition exactly one unit is ever credited — so the two settings together demand two sources from a one-source sample and refuse *every* answer, unconditionally. `GroundingPolicy.regulated` shipped in exactly that state in v1.0.0 and no test noticed, because no test in the suite had ever credited more than one unit. `EvidenceCompositionTests` exists so that class of hole cannot reopen: it pins composition on/off, the citation cap, union-not-sum, the id tie-break, and that `.regulated` both *can* answer and still *does* refuse a single-source answer.
 
 **Hand-rolled tokeniser, not `NLTokenizer`.** The calibration numbers in this README are only meaningful if the tokeniser that produced them is the tokeniser that ships. A platform-dependent tokeniser makes Linux CI results non-transferable to device. Cost: roughly sixty lines of tokeniser you now own, including the rule that a comma is dropped **only** when it is a genuine thousands group — digits either side is not enough, or "Sections 1,2 and 3" silently becomes the figure `12` and the guard rejects a true claim for a number nobody wrote.
 
@@ -138,7 +140,7 @@ The same discipline is applied to the numeric guard itself. `testNumericGuardIsL
 
 No force-unwraps, no `try!`, no `as!`. Every collection access bounds-checked — `EvidenceSet` exposes `public` `unit(at:)`, `terms(at:)` and `literals(at:)`, and no scoring path subscripts directly. They are public because `SupportScorer` is a public seam: a caller writing a custom scorer gets the same guarded access the built-in one uses, not a raw array and good intentions.
 
-Every arithmetic operation whose operands come from caller input — evidence counts, IDF mass, coverage ratios, byte totals, thresholds, sequence numbers — goes through `Safe`: saturating `add`/`multiply`, `divide` that handles both a zero divisor and the single overflowing case `Int.min / -1`, `ratio` that returns `0` rather than `NaN`, and `int(_:)` whose range ceiling is derived from `Int.max` rather than a hardcoded 64-bit literal, because `Int` is 32-bit on watchOS. `clamp01` maps `NaN` to `0` so a score can never be "unsupported" in one branch and "supported" in another depending on which way the comparison happens to be written. Loop bookkeeping bounded by a collection's own `count` uses plain arithmetic — wrapping `index + 1` inside `while index < characters.count` adds noise without removing a reachable trap. That distinction is the actual rule, stated rather than rounded up to "everything".
+Every arithmetic operation whose operands come from caller input — evidence counts, IDF mass, coverage ratios, byte totals, thresholds, sequence numbers — goes through `Safe`. `Safe.add`, `ratio` and `clamp01` carry that load at the shipping call sites; `multiply` and `divide` are part of the same vocabulary and are covered by tests, but no current call site needs them, which is stated here rather than implied away. `divide` handles both a zero divisor and the single overflowing case `Int.min / -1`, `ratio` returns `0` rather than `NaN`, and `int(_:)` whose range ceiling is derived from `Int.max` rather than a hardcoded 64-bit literal, because `Int` is 32-bit on watchOS. `clamp01` maps `NaN` to `0` so a score can never be "unsupported" in one branch and "supported" in another depending on which way the comparison happens to be written. Loop bookkeeping bounded by a collection's own `count` uses plain arithmetic — wrapping `index + 1` inside `while index < characters.count` adds noise without removing a reachable trap. That distinction is the actual rule, stated rather than rounded up to "everything".
 
 Neither the ledger nor the scorer reports a literal it did not check: when no evidence unit is credited to a claim — because everything was too stale, or because nothing overlapped at all — `unmatchedLiterals` is empty and the reason is `.staleEvidence` or `.insufficientCoverage`, not `.numericMismatch`. Otherwise a staleness spike and a hallucination spike look identical in the one metric this package tells you to alert on.
 
@@ -189,7 +191,7 @@ Two policies ship:
 
 ```swift
 GroundingPolicy.observability  // .annotate — measure before you enforce
-GroundingPolicy.regulated      // 0.75 threshold, 2 distinct sources, no composition, .refuse
+GroundingPolicy.regulated      // 0.75 threshold, 2 distinct sources corroborating the same claim, .refuse
 ```
 
 ### Install
@@ -202,7 +204,7 @@ GroundingPolicy.regulated      // 0.75 threshold, 2 distinct sources, no composi
 
 ## Demo app
 
-**[grounding-contract-demo-app](https://github.com/rajatslakhina/grounding-contract-demo-app)** — a SwiftUI app that consumes this package as a remote Swift package over a semantic-version range (`upToNextMajorVersion` from 1.1.0) — not a local path and not a branch. Six candidate model answers, two contract controls, and one of them (**Enforce numeric literals**) turns the fabricated-figure claim from red to green in front of you.
+**[grounding-contract-demo-app](https://github.com/rajatslakhina/grounding-contract-demo-app)** — a SwiftUI app that consumes this package as a remote Swift package over a semantic-version range (`upToNextMajorVersion` from 1.1.0) — not a local path and not a branch. Six candidate model answers and two contract controls. The switch ships **on**, so the fabricated-figure answer opens red; turn **Enforce numeric literals** off and watch that same claim go green.
 
 ---
 
@@ -215,7 +217,7 @@ swift build -Xswiftc -warnings-as-errors
 swift test
 ```
 
-Locally, on Swift 6.0.3 (Linux, Swift 6 language mode), after wiping `.build`: `swift build -Xswiftc -warnings-as-errors` clean and `swift test` → **88 tests, 0 failures**. CI runs the same two commands plus an iOS Simulator compile of `GroundingContractUI` — see the [Actions](../../actions) tab for the current result rather than a run id quoted here that goes stale on the next commit.
+Locally, on Swift 6.0.3 (Linux, Swift 6 language mode), after wiping `.build`: `swift build -Xswiftc -warnings-as-errors` clean and `swift test` → **95 tests, 0 failures**. CI runs the same two commands plus an iOS Simulator compile of `GroundingContractUI` — see the [Actions](../../actions) tab for the current result rather than a run id quoted here that goes stale on the next commit.
 
 **What was not verified, stated plainly:** the demo app was **not run on an iOS Simulator**, and **no screenshots exist** — not in this repo and not in the demo repo. This package was produced by an unattended scheduled task, and computer-use access is not grantable in that mode; the refusal, verbatim, was:
 
