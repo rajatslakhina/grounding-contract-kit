@@ -89,7 +89,12 @@ final class GroundingContractEngineTests: XCTestCase {
     func testRedactionNeverInventsWordsTheModelDidNotWrite() {
         let answer = "\(Fixtures.groundedCacheClaim) \(Fixtures.ungroundedClaim)"
         let result = verify(answer, policy: GroundingPolicy(unsupportedClaimAction: .redact))
-        // Every surviving character must appear, in order, in the original.
+
+        // Subsequence alone is a weak property -- returning "" satisfies it --
+        // so pin the exact surviving text first, then the ordering property.
+        XCTAssertEqual(result.text, Fixtures.groundedCacheClaim)
+        XCTAssertFalse(result.text.isEmpty)
+
         var origin = Array(answer)[...]
         for character in result.text where character != " " {
             guard let index = origin.firstIndex(of: character) else {
@@ -188,16 +193,106 @@ final class GroundingContractEngineTests: XCTestCase {
         XCTAssertEqual(set.units.first?.text, Fixtures.cacheText)
     }
 
-    func testEngineActorPathMatchesThePureStaticPath() async {
-        let engine = GroundingContractEngine(policy: .observability)
-        let viaActor = await engine.verify(
-            answer: Fixtures.fabricatedFigureClaim,
+    func testEngineAppliesItsDefaultPolicyAndWritesToTheAttachedLedger() async {
+        // The actor path adds two things the static path does not: it falls
+        // back to `defaultPolicy` when the caller passes none, and it records
+        // the decision. Both are observed here; comparing the two paths'
+        // verdicts would not be -- they call the same pure function.
+        let ledger = AttributionLedger()
+        let engine = GroundingContractEngine(policy: .regulated, ledger: ledger)
+
+        let result = await engine.verify(
+            answer: Fixtures.groundedCacheClaim,
             evidence: Fixtures.corpus,
             question: "what is the cache budget?"
         )
-        let viaStatic = verify(Fixtures.fabricatedFigureClaim, policy: .observability)
-        XCTAssertEqual(viaActor.verdicts.first?.status, viaStatic.verdicts.first?.status)
-        XCTAssertEqual(viaActor.verdicts.first?.reason, viaStatic.verdicts.first?.reason)
+
+        // `.regulated` requires two distinct sources and refuses; the default
+        // policy would have called this same claim `supported`.
+        XCTAssertEqual(result.outcome, .refused(.unsupportedClaims(1)))
+        XCTAssertEqual(result.verdicts.first?.reason, .insufficientDistinctSources)
+
+        let entries = await ledger.entries()
+        XCTAssertEqual(entries.count, 1)
+        XCTAssertEqual(entries.first?.question, "what is the cache budget?")
+        XCTAssertEqual(entries.first?.outcome, "refused.unsupportedClaims(1)")
+    }
+
+    func testAnEngineWithNoLedgerStillVerifies() async {
+        let engine = GroundingContractEngine(policy: .observability)
+        let result = await engine.verify(
+            answer: Fixtures.fabricatedFigureClaim,
+            evidence: Fixtures.corpus
+        )
+        XCTAssertEqual(result.verdicts.first?.reason, .numericMismatch)
+    }
+
+    func testPublishedCoverageFiguresAreGuardedByAnAssertion() {
+        // The README prints these numbers as measurements. Unasserted numbers
+        // in a README are decoration: a regression moving 0.407 to 0.55 would
+        // otherwise fail nothing. Tolerance is 5e-4 because the README quotes
+        // three decimal places.
+        func coverage(_ answer: String) -> Double {
+            verify(answer, policy: .observability).verdicts.first?.coverage ?? -1
+        }
+        XCTAssertEqual(coverage(Fixtures.groundedCacheClaim), 1.000, accuracy: 5e-4)
+        XCTAssertEqual(coverage(Fixtures.correctFigureClaim), 1.000, accuracy: 5e-4)
+        XCTAssertEqual(coverage(Fixtures.fabricatedFigureClaim), 0.000, accuracy: 5e-4)
+        XCTAssertEqual(
+            coverage("Checkout p95 latency measured 420 ms in the September release."),
+            1.000,
+            accuracy: 5e-4
+        )
+        XCTAssertEqual(coverage(Fixtures.partiallyGroundedClaim), 0.407, accuracy: 5e-4)
+        XCTAssertEqual(coverage(Fixtures.ungroundedClaim), 0.000, accuracy: 5e-4)
+        XCTAssertEqual(
+            coverage("Incident INC-9115 was resolved in 37 minutes."),
+            0.000,
+            accuracy: 5e-4
+        )
+    }
+
+    func testScoringIsDeterministicAcrossRepeatedConstruction() {
+        // Guards the sorted-key summation in `LexicalEntailmentScorer`. Within
+        // one process a `Set`/`Dictionary` iteration order is stable, so this
+        // rebuilds the evidence set (new collections, new insertion order)
+        // rather than calling the same function twice.
+        let shuffledOrder = EvidenceSet(units: Fixtures.corpus.units.reversed())
+        let a = GroundingContractEngine.evaluate(
+            answer: Fixtures.partiallyGroundedClaim,
+            evidence: Fixtures.corpus,
+            policy: .observability
+        ).verdicts.first?.coverage
+        let b = GroundingContractEngine.evaluate(
+            answer: Fixtures.partiallyGroundedClaim,
+            evidence: shuffledOrder,
+            policy: .observability
+        ).verdicts.first?.coverage
+        XCTAssertEqual(a ?? -1, b ?? -2, accuracy: 0)
+    }
+
+    func testDottedVersionNumbersAreVetoedRatherThanIgnored() {
+        // `1.2.3` is neither a plain quantity nor a letter-bearing identifier.
+        // Before it was routed to the identifier channel it fell through the
+        // guard entirely, so "version 1.2.4" passed unvetoed against a corpus
+        // saying 1.2.3 -- a silent hole in the package's headline promise.
+        let evidence = EvidenceSet(units: [
+            Fixtures.unit("release", "The cache rewrite shipped in build 1.2.3 of the client.")
+        ])
+        let wrong = GroundingContractEngine.evaluate(
+            answer: "The cache rewrite shipped in build 1.2.4 of the client.",
+            evidence: evidence,
+            policy: .observability
+        )
+        let right = GroundingContractEngine.evaluate(
+            answer: "The cache rewrite shipped in build 1.2.3 of the client.",
+            evidence: evidence,
+            policy: .observability
+        )
+        XCTAssertEqual(wrong.verdicts.first?.status, .unsupported)
+        XCTAssertEqual(wrong.verdicts.first?.reason, .numericMismatch)
+        XCTAssertEqual(wrong.verdicts.first?.unmatchedLiterals, ["1.2.4"])
+        XCTAssertEqual(right.verdicts.first?.status, .supported)
     }
 
     func testNegativeAndNonFiniteEvidenceAgeIsNormalisedNotTrusted() {

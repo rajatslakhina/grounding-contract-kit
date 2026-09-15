@@ -71,17 +71,25 @@ final class AttributionLedgerTests: XCTestCase {
         // Built once, outside the group: the contention under test is on the
         // ledger actor, not on the (pure) verification path.
         let answer = sampleAnswer()
-        await withTaskGroup(of: Void.self) { group in
+        var issuedIDs: [Int] = []
+        await withTaskGroup(of: Int.self) { group in
             for index in 0 ..< writers {
                 group.addTask { [ledger, answer] in
-                    await ledger.record(question: "q\(index)", answer: answer)
+                    await ledger.record(question: "q\(index)", answer: answer).id
                 }
             }
+            for await id in group { issuedIDs.append(id) }
         }
+        // Uniqueness across every id the ledger ever issued, not merely across
+        // the 50 that happen to survive eviction.
+        XCTAssertEqual(issuedIDs.count, writers)
+        XCTAssertEqual(Set(issuedIDs).count, writers, "ids collided under contention")
+        XCTAssertEqual(issuedIDs.min(), 0)
+        XCTAssertEqual(issuedIDs.max(), writers - 1)
+
         let entries = await ledger.entries()
         let evicted = await ledger.evictedEntryCount()
         XCTAssertEqual(entries.count, 50)
-        XCTAssertEqual(Set(entries.map(\.id)).count, entries.count, "ids collided under contention")
         XCTAssertEqual(evicted, writers - 50)
         // Ids must still be monotonically increasing in storage order.
         for (previous, next) in zip(entries, entries.dropFirst()) {
