@@ -37,10 +37,17 @@ final class AttributionLedgerTests: XCTestCase {
             await ledger.record(question: String(repeating: "q", count: 100) + "\(index)", answer: sampleAnswer())
         }
         let entries = await ledger.entries()
-        let bytes = await ledger.retainedByteCount()
+        let evicted = await ledger.evictedEntryCount()
+        // `retainedByteCount()` is the same counter the eviction loop reads,
+        // so asserting it is under budget restates the loop condition. What
+        // carries information: eviction happened without the count budget
+        // being involved, nothing was lost silently, and the entries kept are
+        // the NEWEST ones.
         XCTAssertLessThan(entries.count, 20)
-        XCTAssertLessThanOrEqual(bytes, 400)
         XCTAssertGreaterThan(entries.count, 0)
+        XCTAssertEqual(Safe.add(entries.count, evicted), 20)
+        let suffix = (20 - entries.count ..< 20).map { String(repeating: "q", count: 100) + "\($0)" }
+        XCTAssertEqual(entries.map(\.question), suffix)
     }
 
     func testASingleOversizedEntryIsRetainedRatherThanLoopingForever() async {
@@ -65,6 +72,12 @@ final class AttributionLedgerTests: XCTestCase {
         XCTAssertEqual(all.count, 3)
     }
 
+    /// Scope note, stated because the name could oversell it: `record` has no
+    /// `await` in its body, so actor isolation already makes interleaving
+    /// impossible and this cannot catch a data race today. It is a regression
+    /// guard for the day someone adds a suspension point inside `record` --
+    /// at which point id assignment and eviction stop being atomic and this
+    /// test starts failing.
     func testConcurrentWritersProduceUniqueIdsAndARespectedBound() async {
         let ledger = AttributionLedger(maximumEntries: 50)
         let writers = 200

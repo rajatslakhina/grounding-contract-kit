@@ -50,10 +50,17 @@ final class SafeArithmeticTests: XCTestCase {
         XCTAssertEqual(Safe.int(3.7), 3)
     }
 
-    func testIntCeilingIsDerivedFromIntMaxNotAHardcodedLiteral() {
-        // On a 32-bit `Int` platform (watchOS) `Double(Int.max)` is ~2.1e9.
-        // Anything at or above the platform ceiling must saturate, not wrap.
-        let justOver = Double(Int.max).nextUp
-        XCTAssertEqual(Safe.int(justOver), Int.max)
+    func testIntSaturatesAtThePlatformCeilingAndFloor() {
+        // Honest scope note: on a 64-bit host this assertion cannot
+        // distinguish `>= Double(Int.max)` from a hardcoded
+        // `9223372036854775808.0`, because they are the same value there. The
+        // `Int.max` derivation is a source-level property -- it is what makes
+        // the ceiling correct on watchOS, where `Int` is 32-bit -- and is
+        // verified by reading the code, not by this test. What this test does
+        // pin is that the boundary saturates instead of trapping or wrapping.
+        XCTAssertEqual(Safe.int(Double(Int.max).nextUp), Int.max)
+        XCTAssertEqual(Safe.int(Double(Int.min).nextDown), Int.min)
+        XCTAssertEqual(Safe.int(0), 0)
+        XCTAssertEqual(Safe.int(-3.7), -3)
     }
 }

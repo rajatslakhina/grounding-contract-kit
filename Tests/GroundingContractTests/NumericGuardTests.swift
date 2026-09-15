@@ -67,9 +67,37 @@ final class NumericGuardTests: XCTestCase {
     }
 
     func testThousandsSeparatedAndPlainFiguresAreTheSameLiteral() {
-        XCTAssertEqual(
-            NumericGuard.literals(in: "the budget was 4,200 units"),
-            NumericGuard.literals(in: "the budget was 4200 units")
-        )
+        // Both sides pinned to a literal expectation, not merely to each
+        // other: a `literals(in:)` stubbed to return `[]` would satisfy an
+        // equality-only assertion.
+        XCTAssertEqual(NumericGuard.literals(in: "the budget was 4,200 units"), ["4200"])
+        XCTAssertEqual(NumericGuard.literals(in: "the budget was 4200 units"), ["4200"])
+    }
+
+    func testCommasThatAreNotThousandsSeparatorsDoNotFabricateFigures() {
+        // "Sections 1,2 and 3" must not produce the figure 12 -- a number
+        // nobody wrote, which the guard would then demand the evidence
+        // corroborate, rejecting a true claim.
+        XCTAssertEqual(NumericGuard.literals(in: "Sections 1,2 and 3 were updated"), ["1", "2", "3"])
+        XCTAssertEqual(NumericGuard.literals(in: "Rows 10,11 changed"), ["10", "11"])
+        // Four digits after the comma is not a thousands group either.
+        XCTAssertEqual(NumericGuard.literals(in: "ids 4,20003"), ["4", "20003"])
+        // A real thousands group still collapses, including a chained one.
+        XCTAssertEqual(NumericGuard.literals(in: "1,234,567 records"), ["1234567"])
+    }
+
+    func testToleranceDoesNotPretendToUnderstandScaleWords() {
+        // The documented limitation, pinned: "4.2 million" is the literal 4.2,
+        // and no sane tolerance matches it against 4215000.
+        guard let claim = NumericGuard.classify("4.2") else { return XCTFail("not classified") }
+        XCTAssertFalse(NumericGuard.isSatisfied(claim, by: ["4215000"], relativeTolerance: 0.5))
+        // The case tolerance *is* for: same order of magnitude, model rounded.
+        guard let rounded = NumericGuard.classify("420") else { return XCTFail("not classified") }
+        XCTAssertTrue(NumericGuard.isSatisfied(rounded, by: ["418"], relativeTolerance: 0.01))
+    }
+
+    func testDottedVersionTokensAreClassifiedAsIdentifiers() {
+        XCTAssertEqual(NumericGuard.classify("1.2.3")?.kind, .identifier)
+        XCTAssertEqual(NumericGuard.classify("1.2.3")?.canonical, "1.2.3")
     }
 }

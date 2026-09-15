@@ -252,23 +252,65 @@ final class GroundingContractEngineTests: XCTestCase {
         )
     }
 
-    func testScoringIsDeterministicAcrossRepeatedConstruction() {
-        // Guards the sorted-key summation in `LexicalEntailmentScorer`. Within
-        // one process a `Set`/`Dictionary` iteration order is stable, so this
-        // rebuilds the evidence set (new collections, new insertion order)
-        // rather than calling the same function twice.
-        let shuffledOrder = EvidenceSet(units: Fixtures.corpus.units.reversed())
-        let a = GroundingContractEngine.evaluate(
-            answer: Fixtures.partiallyGroundedClaim,
-            evidence: Fixtures.corpus,
+    func testCitationOrderDoesNotDependOnEvidenceInsertionOrder() {
+        // Ranking must be a function of the evidence, not of the order the
+        // caller happened to hand it over. (Summation order is fixed by
+        // sorting keys in the scorer; that is a source-level property no
+        // single-process test can falsify, and the README says so rather than
+        // claiming a test proves it.)
+        let forwards = Fixtures.corpus
+        let backwards = EvidenceSet(units: Fixtures.corpus.units.reversed())
+        func citations(_ set: EvidenceSet) -> [String] {
+            GroundingContractEngine
+                .evaluate(answer: Fixtures.partiallyGroundedClaim, evidence: set, policy: .observability)
+                .verdicts.first?.citations.map(\.evidenceID) ?? []
+        }
+        XCTAssertEqual(citations(forwards), ["cache"])
+        XCTAssertEqual(citations(backwards), ["cache"])
+    }
+
+    func testStaleEvidenceIsNotReportedAsAFabricatedFigure() {
+        // Regression: the no-credited-evidence path used to dump every literal
+        // in the claim into `unmatchedLiterals`, so a staleness block looked
+        // identical to a hallucinated number in the ledger -- the single metric
+        // the package tells callers to alert on.
+        let stale = EvidenceSet(units: [
+            Fixtures.unit("cache", Fixtures.cacheText, ageSeconds: 10_000)
+        ])
+        let verdict = GroundingContractEngine.evaluate(
+            answer: Fixtures.correctFigureClaim,
+            evidence: stale,
+            policy: GroundingPolicy(
+                staleEvidenceHorizonSeconds: 3_600,
+                unsupportedClaimAction: .annotate
+            )
+        ).verdicts.first
+        XCTAssertEqual(verdict?.reason, .staleEvidence)
+        XCTAssertEqual(verdict?.unmatchedLiterals, [], "48 is in the evidence; it is not uncorroborated")
+    }
+
+    func testAZeroOverlapClaimIsInsufficientCoverageNotNumericMismatch() {
+        // A claim sharing no vocabulary with the corpus was being reported as
+        // a numeric fabrication purely because it contained a digit.
+        let verdict = verify(
+            "Terraform drift reconciled 9999 pods overnight.",
             policy: .observability
-        ).verdicts.first?.coverage
-        let b = GroundingContractEngine.evaluate(
-            answer: Fixtures.partiallyGroundedClaim,
-            evidence: shuffledOrder,
-            policy: .observability
-        ).verdicts.first?.coverage
-        XCTAssertEqual(a ?? -1, b ?? -2, accuracy: 0)
+        ).verdicts.first
+        XCTAssertEqual(verdict?.reason, .insufficientCoverage)
+        XCTAssertEqual(verdict?.unmatchedLiterals, [])
+    }
+
+    func testNothingSurvivedRedactionIsReachableAtAFullRedactionBudget() {
+        // At `maximumRedactionRatio == 1` the budget check cannot fire, so the
+        // "everything was cut" branch is the one that reports. Below 1 the
+        // budget always wins, because removing every claim is by definition a
+        // ratio of 1 -- which is why the demo app never shows this cause.
+        let result = verify(
+            Fixtures.ungroundedClaim,
+            policy: GroundingPolicy(unsupportedClaimAction: .redact, maximumRedactionRatio: 1)
+        )
+        XCTAssertEqual(result.outcome, .refused(.nothingSurvivedRedaction))
+        XCTAssertEqual(result.text, "")
     }
 
     func testDottedVersionNumbersAreVetoedRatherThanIgnored() {
