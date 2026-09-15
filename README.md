@@ -10,7 +10,7 @@ iOS 27 made local RAG two lines of Swift. `SpotlightSearchTool` plugs a `Languag
 - What happens to the ones that aren't?
 - How do you know your checker works?
 
-This package is the answer to those three questions, and it needs no model to run — which is why its behaviour is verified on Linux CI, in 77 tests, with zero ML weights.
+This package is the answer to those three questions, and it needs no model to run — which is why its behaviour is verified on Linux CI, in 88 tests, with zero ML weights.
 
 ---
 
@@ -44,7 +44,7 @@ Measured, from `GroundingContractEngineTests` against the package's own fixture 
 
 Note rows 3 and 4 share almost every word with a supported claim. One digit is the entire difference, and one digit is the entire outcome.
 
-Those coverage figures are not decoration: `testPublishedCoverageFiguresAreGuardedByAnAssertion` pins every one of them to three decimal places, so a regression that moved 0.407 to 0.55 fails the build instead of quietly making this table wrong.
+Those coverage figures are not decoration: `testPublishedCoverageFiguresAreGuardedByAnAssertion` pins every one of them to three decimal places, so a regression that moved 0.407 to 0.55 fails the build instead of quietly making this table wrong. `DemoScenarioTests` does the same job for the demo app's published outcome table — the demo is an app with no test target, so its README's claims are asserted here instead of nowhere.
 
 ---
 
@@ -100,13 +100,13 @@ Every box is a protocol or a value type. Scoring is **pure and synchronous** —
 
 **Evidence composition is on by default, and it is a real trade-off.** `allowsEvidenceComposition` lets a claim accumulate coverage across up to three units, which is necessary for multi-hop claims — and also accepts a claim stitched from fragments that never co-occurred, which is a genuine fabrication mode. `GroundingPolicy.regulated` turns it off. The trade-off is named rather than hidden.
 
-**Hand-rolled tokeniser, not `NLTokenizer`.** The calibration numbers in this README are only meaningful if the tokeniser that produced them is the tokeniser that ships. A platform-dependent tokeniser makes Linux CI results non-transferable to device. Cost: the tokeniser is ~90 lines you now own.
+**Hand-rolled tokeniser, not `NLTokenizer`.** The calibration numbers in this README are only meaningful if the tokeniser that produced them is the tokeniser that ships. A platform-dependent tokeniser makes Linux CI results non-transferable to device. Cost: roughly sixty lines of tokeniser you now own, including the rule that a comma is dropped **only** when it is a genuine thousands group — digits either side is not enough, or "Sections 1,2 and 3" silently becomes the figure `12` and the guard rejects a true claim for a number nobody wrote.
 
 **Negation is not a stopword.** Stripping `not` makes "not evicted" and "evicted" the same claim. That is a correctness bug wearing a recall trade-off's clothes.
 
 **Two budgets on the ledger, both enforced.** A count budget alone is unbounded in memory when questions are long; a byte budget alone lets a flood of tiny entries evict the ones that mattered. Oldest-first eviction, and `evictedEntryCount()` is public so a caller can tell "no problems" from "the evidence of the problems was evicted".
 
-**Deterministic summation, not nearly-deterministic.** Floating-point addition is not associative and Swift's `Hasher` is seeded per process, so summing IDF mass while iterating a `Dictionary` or a `Set` varies the last ULP of `coverage` between runs — enough to flip a claim sitting exactly on a threshold. The scorer sums over sorted keys instead. A determinism claim is either true or it is marketing.
+**Deterministic summation, not nearly-deterministic.** Floating-point addition is not associative and Swift's `Hasher` is seeded per process, so summing IDF mass while iterating a `Dictionary` or a `Set` varies the last ULP of `coverage` between runs — enough to flip a claim sitting exactly on a threshold. The scorer sums over sorted keys instead. Scope note, since this document is otherwise careful to say what is test-verified: this is a *source-level* property, confirmed by reading `LexicalEntailmentScorer.score`. A single-process test cannot falsify it, because within one process the hash seed is fixed — so no test here claims to.
 
 **Dotted version numbers are treated as identifiers, not ignored.** `1.2.3` is neither a plain quantity nor a letter-bearing token. Letting it fall through as "no literal here" would mean "version 1.2.4" passed unvetoed against a corpus saying 1.2.3 — a silent hole in the package's headline promise. It has no magnitude, so it is matched exactly, like a SKU.
 
@@ -138,9 +138,11 @@ The same discipline is applied to the numeric guard itself. `testNumericGuardIsL
 
 No force-unwraps, no `try!`, no `as!`. Every collection access bounds-checked — `EvidenceSet` exposes `public` `unit(at:)`, `terms(at:)` and `literals(at:)`, and no scoring path subscripts directly. They are public because `SupportScorer` is a public seam: a caller writing a custom scorer gets the same guarded access the built-in one uses, not a raw array and good intentions.
 
-Every trapping arithmetic operation goes through `Safe`: saturating `add`/`multiply`, `divide` that handles both a zero divisor and the single overflowing case `Int.min / -1`, `ratio` that returns `0` rather than `NaN`, and `int(_:)` whose range ceiling is derived from `Int.max` rather than a hardcoded 64-bit literal, because `Int` is 32-bit on watchOS. `clamp01` maps `NaN` to `0` so a score can never be "unsupported" in one branch and "supported" in another depending on which way the comparison happens to be written.
+Every arithmetic operation whose operands come from caller input — evidence counts, IDF mass, coverage ratios, byte totals, thresholds, sequence numbers — goes through `Safe`: saturating `add`/`multiply`, `divide` that handles both a zero divisor and the single overflowing case `Int.min / -1`, `ratio` that returns `0` rather than `NaN`, and `int(_:)` whose range ceiling is derived from `Int.max` rather than a hardcoded 64-bit literal, because `Int` is 32-bit on watchOS. `clamp01` maps `NaN` to `0` so a score can never be "unsupported" in one branch and "supported" in another depending on which way the comparison happens to be written. Loop bookkeeping bounded by a collection's own `count` uses plain arithmetic — wrapping `index + 1` inside `while index < characters.count` adds noise without removing a reachable trap. That distinction is the actual rule, stated rather than rounded up to "everything".
 
-The ledger's eviction loop terminates even when a single entry is larger than the entire byte budget: the byte clause carries its own `storage.count > 1` guard, so an over-budget entry is retained rather than evicted into an empty ledger that could never satisfy the budget anyway (`testASingleOversizedEntryIsRetainedRatherThanLoopingForever`). 200 concurrent writers against a 50-entry ledger issue **200 unique, monotonic ids** — the test collects every id `record` returns, not just the 50 that survive — and leave 50 retained entries with 150 recorded evictions.
+Neither the ledger nor the scorer reports a literal it did not check: when no evidence unit is credited to a claim — because everything was too stale, or because nothing overlapped at all — `unmatchedLiterals` is empty and the reason is `.staleEvidence` or `.insufficientCoverage`, not `.numericMismatch`. Otherwise a staleness spike and a hallucination spike look identical in the one metric this package tells you to alert on.
+
+The ledger's eviction loop terminates even when a single entry is larger than the entire byte budget: the byte clause carries its own `storage.count > 1` guard, so an over-budget entry is retained rather than evicted into an empty ledger that could never satisfy the budget anyway (`testASingleOversizedEntryIsRetainedRatherThanLoopingForever`). 200 concurrent writers against a 50-entry ledger issue **200 unique, monotonic ids** — the test collects every id `record` returns, not just the 50 that survive — and leave 50 retained entries with 150 recorded evictions. Stated honestly: `record` has no `await` in its body, so actor isolation already makes interleaving impossible and that test cannot catch a race *today*. It is a regression guard for the day a suspension point appears inside `record`, and it is labelled as one.
 
 ---
 
@@ -200,7 +202,7 @@ GroundingPolicy.regulated      // 0.75 threshold, 2 distinct sources, no composi
 
 ## Demo app
 
-**[grounding-contract-demo-app](https://github.com/rajatslakhina/grounding-contract-demo-app)** — a SwiftUI app that consumes this package as a version-pinned remote dependency. Six candidate model answers, two contract toggles, and one toggle (**Enforce numeric literals**) that turns the fabricated-figure claim from red to green in front of you.
+**[grounding-contract-demo-app](https://github.com/rajatslakhina/grounding-contract-demo-app)** — a SwiftUI app that consumes this package as a remote Swift package over a semantic-version range (`upToNextMajorVersion` from 1.1.0) — not a local path and not a branch. Six candidate model answers, two contract controls, and one of them (**Enforce numeric literals**) turns the fabricated-figure claim from red to green in front of you.
 
 ---
 
@@ -213,7 +215,7 @@ swift build -Xswiftc -warnings-as-errors
 swift test
 ```
 
-Locally, on Swift 6.0.3 (Linux, Swift 6 language mode), after wiping `.build`: `swift build -Xswiftc -warnings-as-errors` clean and `swift test` → **77 tests, 0 failures**. CI runs the same two commands plus an iOS Simulator compile of `GroundingContractUI` — see the [Actions](../../actions) tab for the current result rather than a run id quoted here that goes stale on the next commit.
+Locally, on Swift 6.0.3 (Linux, Swift 6 language mode), after wiping `.build`: `swift build -Xswiftc -warnings-as-errors` clean and `swift test` → **88 tests, 0 failures**. CI runs the same two commands plus an iOS Simulator compile of `GroundingContractUI` — see the [Actions](../../actions) tab for the current result rather than a run id quoted here that goes stale on the next commit.
 
 **What was not verified, stated plainly:** the demo app was **not run on an iOS Simulator**, and **no screenshots exist** — not in this repo and not in the demo repo. This package was produced by an unattended scheduled task, and computer-use access is not grantable in that mode; the refusal, verbatim, was:
 
