@@ -61,9 +61,35 @@ public final class GroundingReportModel {
             question: question,
             policy: requestedPolicy
         )
-        guard token == generation, !Task.isCancelled else { return }
+        // Only the newest generation writes -- and it always writes, including
+        // the `isVerifying` reset. An early `return` that skipped the reset
+        // would leave a spinner running forever when the view is torn down
+        // mid-verification.
+        guard token == generation else { return }
         result = verified
         isVerifying = false
+    }
+
+    /// Every piece of state a verification depends on, as one value.
+    ///
+    /// `answer` and `policy` are both public and mutable, so a view keying its
+    /// `.task` on a hand-picked subset of them shows a silently stale verdict
+    /// the moment a consumer changes anything else -- a threshold, a tolerance,
+    /// the staleness horizon. Deriving the key from the whole of both removes
+    /// the possibility rather than documenting it.
+    public var stateKey: String {
+        [
+            answer,
+            "\(policy.supportThreshold)",
+            "\(policy.weakSupportThreshold)",
+            "\(policy.numericTolerance)",
+            "\(policy.enforcesNumericLiterals)",
+            "\(policy.staleEvidenceHorizonSeconds ?? -1)",
+            "\(policy.minimumDistinctSources)",
+            "\(policy.allowsEvidenceComposition)",
+            policy.unsupportedClaimAction.rawValue,
+            "\(policy.maximumRedactionRatio)"
+        ].joined(separator: "|")
     }
 }
 
@@ -105,18 +131,25 @@ public struct GroundingReportView: View {
                         VerdictRow(verdict: verdict)
                     }
                 }
-            } else if model.isVerifying {
-                Section { ProgressView() }
+            }
+
+            if model.isVerifying {
+                // Shown whether or not a previous result is on screen, so a
+                // re-verification after a contract change is visible rather
+                // than looking like nothing happened.
+                Section {
+                    HStack(spacing: 8) {
+                        ProgressView()
+                        Text("Verifying\u{2026}").font(.footnote).foregroundStyle(.secondary)
+                    }
+                }
             }
         }
         .task(id: taskKey) { await model.verify() }
     }
 
-    /// Re-runs verification whenever any contract term the UI can change
-    /// changes. Keyed on a value rather than firing on every body evaluation.
-    private var taskKey: String {
-        "\(model.policy.unsupportedClaimAction.rawValue)-\(model.policy.enforcesNumericLiterals)"
-    }
+    /// Re-runs verification whenever anything the verdict depends on changes.
+    private var taskKey: String { model.stateKey }
 
     private var policyBinding: Binding<UnsupportedClaimAction> {
         Binding(
