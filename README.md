@@ -10,7 +10,7 @@ iOS 27 made local RAG two lines of Swift. `SpotlightSearchTool` plugs a `Languag
 - What happens to the ones that aren't?
 - How do you know your checker works?
 
-This package is the answer to those three questions, and it needs no model to run — which is why its behaviour is verified on Linux CI, in 71 tests, with zero ML weights.
+This package is the answer to those three questions, and it needs no model to run — which is why its behaviour is verified on Linux CI, in 77 tests, with zero ML weights.
 
 ---
 
@@ -43,6 +43,8 @@ Measured, from `GroundingContractEngineTests` against the package's own fixture 
 | "Kubernetes autoscaling was disabled for the nightly worker pool." | **0.000** | `unsupported` · `insufficientCoverage` |
 
 Note rows 3 and 4 share almost every word with a supported claim. One digit is the entire difference, and one digit is the entire outcome.
+
+Those coverage figures are not decoration: `testPublishedCoverageFiguresAreGuardedByAnAssertion` pins every one of them to three decimal places, so a regression that moved 0.407 to 0.55 fails the build instead of quietly making this table wrong.
 
 ---
 
@@ -104,6 +106,10 @@ Every box is a protocol or a value type. Scoring is **pure and synchronous** —
 
 **Two budgets on the ledger, both enforced.** A count budget alone is unbounded in memory when questions are long; a byte budget alone lets a flood of tiny entries evict the ones that mattered. Oldest-first eviction, and `evictedEntryCount()` is public so a caller can tell "no problems" from "the evidence of the problems was evicted".
 
+**Deterministic summation, not nearly-deterministic.** Floating-point addition is not associative and Swift's `Hasher` is seeded per process, so summing IDF mass while iterating a `Dictionary` or a `Set` varies the last ULP of `coverage` between runs — enough to flip a claim sitting exactly on a threshold. The scorer sums over sorted keys instead. A determinism claim is either true or it is marketing.
+
+**Dotted version numbers are treated as identifiers, not ignored.** `1.2.3` is neither a plain quantity nor a letter-bearing token. Letting it fall through as "no literal here" would mean "version 1.2.4" passed unvetoed against a corpus saying 1.2.3 — a silent hole in the package's headline promise. It has no magnitude, so it is matched exactly, like a SKU.
+
 ---
 
 ## Measuring the verifier
@@ -118,7 +124,7 @@ sweep.recommended   // best F1, ties broken toward recall, then toward the lower
 Two deliberate refusals to flatter:
 
 - `precision` and `recall` are **0**, not 1, when their denominator is zero. A do-nothing verifier that rejected nothing and was therefore never wrong must not score 1.0.
-- Calibration always runs enforcement as `.annotate`, so it measures the *detector* and never the *response*. `testCalibrationIgnoresEnforcementSoItMeasuresTheDetectorNotTheResponse` asserts `.refuse` and `.redact` produce an identical matrix.
+- Calibration reads `verdicts`, and enforcement never edits that array — it only decides what text comes back. So the confusion matrix is independent of the response *by construction*, not by an override. `testCalibrationMatrixIsIndependentOfEnforcement` asserts both halves: `.refuse` and `.redact` produce an identical matrix, **and** they produce genuinely different answers, so the first assertion is not passing for the trivial reason.
 
 ### The test that matters most
 
@@ -130,11 +136,11 @@ The same discipline is applied to the numeric guard itself. `testNumericGuardIsL
 
 ## Safety properties
 
-No force-unwraps. Every collection access bounds-checked — `EvidenceSet` exposes `unit(at:)`, `terms(at:)`, `literals(at:)` and no scoring path subscripts directly.
+No force-unwraps, no `try!`, no `as!`. Every collection access bounds-checked — `EvidenceSet` exposes `public` `unit(at:)`, `terms(at:)` and `literals(at:)`, and no scoring path subscripts directly. They are public because `SupportScorer` is a public seam: a caller writing a custom scorer gets the same guarded access the built-in one uses, not a raw array and good intentions.
 
 Every trapping arithmetic operation goes through `Safe`: saturating `add`/`multiply`, `divide` that handles both a zero divisor and the single overflowing case `Int.min / -1`, `ratio` that returns `0` rather than `NaN`, and `int(_:)` whose range ceiling is derived from `Int.max` rather than a hardcoded 64-bit literal, because `Int` is 32-bit on watchOS. `clamp01` maps `NaN` to `0` so a score can never be "unsupported" in one branch and "supported" in another depending on which way the comparison happens to be written.
 
-The ledger's eviction loop terminates on the count budget even when a single entry is larger than the entire byte budget (`testASingleOversizedEntryIsRetainedRatherThanLoopingForever`). 200 concurrent writers against a 50-entry ledger produce 50 entries, 200 unique monotonic ids, and 150 recorded evictions.
+The ledger's eviction loop terminates even when a single entry is larger than the entire byte budget: the byte clause carries its own `storage.count > 1` guard, so an over-budget entry is retained rather than evicted into an empty ledger that could never satisfy the budget anyway (`testASingleOversizedEntryIsRetainedRatherThanLoopingForever`). 200 concurrent writers against a 50-entry ledger issue **200 unique, monotonic ids** — the test collects every id `record` returns, not just the 50 that survive — and leave 50 retained entries with 150 recorded evictions.
 
 ---
 
@@ -148,7 +154,7 @@ let evidence = EvidenceSet(units: retrievedItems.map {
         provenance: Provenance(
             sourceID: "spotlight.local",
             displayName: $0.attributeSet.title ?? "Untitled",
-            ageSeconds: $0.ageInSeconds
+            ageSeconds: Date.now.timeIntervalSince($0.attributeSet.contentModificationDate ?? .now)
         )
     )
 })
@@ -162,8 +168,9 @@ let engine = GroundingContractEngine(
     ledger: AttributionLedger()
 )
 
+let response = try await session.respond(to: prompt)
 let verified = await engine.verify(
-    answer: session.respond(to: prompt).content,
+    answer: response.content,
     evidence: evidence,
     question: prompt
 )
@@ -193,7 +200,7 @@ GroundingPolicy.regulated      // 0.75 threshold, 2 distinct sources, no composi
 
 ## Demo app
 
-Demo app: (added after the companion repo is pushed — see below)
+**[grounding-contract-demo-app](https://github.com/rajatslakhina/grounding-contract-demo-app)** — a SwiftUI app that consumes this package as a version-pinned remote dependency. Six candidate model answers, two contract toggles, and one toggle (**Enforce numeric literals**) that turns the fabricated-figure claim from red to green in front of you.
 
 ---
 
@@ -206,7 +213,13 @@ swift build -Xswiftc -warnings-as-errors
 swift test
 ```
 
-What was actually verified for the released version is stated in the release notes and on the [Actions](../../actions) tab, not asserted here.
+Locally, on Swift 6.0.3 (Linux, Swift 6 language mode), after wiping `.build`: `swift build -Xswiftc -warnings-as-errors` clean and `swift test` → **77 tests, 0 failures**. CI runs the same two commands plus an iOS Simulator compile of `GroundingContractUI` — see the [Actions](../../actions) tab for the current result rather than a run id quoted here that goes stale on the next commit.
+
+**What was not verified, stated plainly:** the demo app was **not run on an iOS Simulator**, and **no screenshots exist** — not in this repo and not in the demo repo. This package was produced by an unattended scheduled task, and computer-use access is not grantable in that mode; the refusal, verbatim, was:
+
+> Computer-use access to "Simulator" can't be approved during a scheduled run. To grant it, send a message in this conversation (the approval card will appear), or add the app to the scheduled task's settings. (Retrying returns this same result.)
+
+"It compiles for an iOS Simulator destination" and "it ran on an iOS Simulator" are different claims. Only the first is true here. Nothing in this repo has been observed rendering on a screen.
 
 ## License
 
