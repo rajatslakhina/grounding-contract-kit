@@ -35,7 +35,7 @@ public struct GroundingPolicy: Sendable, Hashable {
 
     /// When `false`, the numeric channel is disabled and figures are judged by
     /// prose similarity alone. Provided so the effect of the guard can be
-    /// measured rather than asserted — see `testNumericGuardIsLoadBearing`.
+    /// measured rather than asserted — see `testNumericGuardIsLoadBearingNotDecorative`.
     public let enforcesNumericLiterals: Bool
 
     /// Evidence older than this is not allowed to support a claim. `nil`
@@ -52,6 +52,14 @@ public struct GroundingPolicy: Sendable, Hashable {
     /// `true` accepts multi-hop claims ("A, and separately B") but also
     /// accepts a claim stitched from fragments that never co-occurred, which
     /// is a real fabrication mode. Default `true`, with the trade-off named.
+    ///
+    /// **Invariant:** composition is forced on whenever
+    /// `minimumDistinctSources > 1`. Only credited units can contribute a
+    /// source, and without composition exactly one unit is ever credited --
+    /// so the two settings together would demand two sources from a
+    /// one-source sample and refuse *every* answer, unconditionally. A policy
+    /// that can never be satisfied is not a strict policy, it is a broken one,
+    /// and the initialiser refuses to build it.
     public let allowsEvidenceComposition: Bool
 
     public let unsupportedClaimAction: UnsupportedClaimAction
@@ -82,8 +90,10 @@ public struct GroundingPolicy: Sendable, Hashable {
         } else {
             self.staleEvidenceHorizonSeconds = nil
         }
-        self.minimumDistinctSources = max(1, minimumDistinctSources)
-        self.allowsEvidenceComposition = allowsEvidenceComposition
+        let distinctSources = max(1, minimumDistinctSources)
+        self.minimumDistinctSources = distinctSources
+        // See the invariant on `allowsEvidenceComposition`.
+        self.allowsEvidenceComposition = distinctSources > 1 ? true : allowsEvidenceComposition
         self.unsupportedClaimAction = unsupportedClaimAction
         self.maximumRedactionRatio = Safe.clamp01(maximumRedactionRatio)
     }
@@ -92,13 +102,20 @@ public struct GroundingPolicy: Sendable, Hashable {
     public static let observability = GroundingPolicy(unsupportedClaimAction: .annotate)
 
     /// The setting for an answer that will be read as fact: exact figures,
-    /// two independent sources, refuse rather than trim.
+    /// two independent sources corroborating the same claim, refuse rather
+    /// than trim.
+    ///
+    /// Composition is on, and necessarily so: requiring two distinct sources
+    /// means two units must be credited, and only composition credits more
+    /// than one. The looser thing this policy gives up -- rejecting a claim
+    /// stitched from fragments that never co-occurred -- is bought back by the
+    /// higher coverage threshold and by the two-source requirement itself.
     public static let regulated = GroundingPolicy(
         supportThreshold: 0.75,
         weakSupportThreshold: 0.6,
         numericTolerance: 0,
         minimumDistinctSources: 2,
-        allowsEvidenceComposition: false,
+        allowsEvidenceComposition: true,
         unsupportedClaimAction: .refuse
     )
 }

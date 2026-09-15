@@ -48,7 +48,13 @@ public struct ClaimVerdict: Sendable, Hashable, Identifiable {
     public let status: Status
     /// Total coverage in `0...1` after composition and the numeric veto.
     public let coverage: Double
-    /// Evidence units backing this claim, best first. Empty when unsupported.
+    /// Evidence units credited for this claim, best first.
+    ///
+    /// Present even on most `unsupported` verdicts: a claim vetoed for a
+    /// fabricated figure, or one that fell short on coverage, was still scored
+    /// against real evidence, and showing which evidence is how a reader sees
+    /// *why* it failed. Only `.noEvidence` and `.staleEvidence` leave this
+    /// empty, because in those two cases nothing was credited at all.
     public let citations: [Citation]
     public let reason: UnsupportedReason?
     /// Literals in the claim that no supporting evidence corroborates.
