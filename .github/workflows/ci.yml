@@ -1,0 +1,36 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  linux:
+    name: Swift 6 / Linux
+    runs-on: ubuntu-latest
+    container: swift:6.0
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build (warnings are errors)
+        run: swift build -Xswiftc -warnings-as-errors
+      - name: Test
+        run: swift test
+
+  apple:
+    # The Linux job cannot see the SwiftUI module at all -- every file in it is
+    # behind `#if canImport(SwiftUI)`. This job is what actually compiles it.
+    # `generic/platform=iOS Simulator` is deliberate: a named device would tie
+    # the job to whichever simulator runtimes that day's runner image happens
+    # to ship, and a compile-only check needs no device to exist.
+    name: iOS Simulator build (SwiftUI module)
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build GroundingContractUI for iOS Simulator
+        run: |
+          xcodebuild build \
+            -scheme GroundingContractUI \
+            -destination 'generic/platform=iOS Simulator'
