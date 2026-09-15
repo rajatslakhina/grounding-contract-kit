@@ -112,8 +112,13 @@ public actor AttributionLedger {
     public func retainedByteCount() -> Int { retainedBytes }
 
     private func evictIfNeeded() {
-        // A single entry larger than the whole byte budget must not spin this
-        // loop forever, so the count check is what finally terminates it.
+        // Termination: the count clause strictly decreases `storage.count`
+        // toward `maximumEntries`, and the byte clause carries its own
+        // `storage.count > 1` guard. That guard -- not the count budget -- is
+        // what stops the loop when a single entry is larger than the entire
+        // byte budget: with one entry left the byte clause is false, so an
+        // over-budget entry is retained rather than evicted into an empty
+        // ledger that could never satisfy the budget anyway.
         while storage.count > maximumEntries
             || (retainedBytes > maximumBytes && storage.count > 1) {
             guard !storage.isEmpty else { break }

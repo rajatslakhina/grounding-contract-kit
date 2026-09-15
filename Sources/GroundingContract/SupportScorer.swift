@@ -89,7 +89,15 @@ public struct LexicalEntailmentScorer: SupportScorer {
         for term in claimTerms where weightByTerm[term] == nil {
             weightByTerm[term] = evidence.idf.weight(for: term)
         }
-        let totalMass = weightByTerm.values.reduce(0, +)
+        // Summation order is fixed by sorting the keys. Floating-point
+        // addition is not associative and Swift's `Hasher` is seeded per
+        // process, so summing over a `Dictionary` or a `Set` would vary the
+        // last ULP of `coverage` between runs -- enough to flip a claim sitting
+        // exactly on a threshold. The determinism this package claims has to be
+        // real, not nearly real.
+        let orderedTerms = weightByTerm.keys.sorted()
+        var totalMass: Double = 0
+        for term in orderedTerms { totalMass += weightByTerm[term] ?? 0 }
         guard totalMass.isFinite, totalMass > 0 else {
             return SupportMeasurement(
                 coverage: 0,
@@ -118,9 +126,9 @@ public struct LexicalEntailmentScorer: SupportScorer {
             let unitTerms = evidence.terms(at: index)
             var matched: Set<String> = []
             var mass: Double = 0
-            for (term, weight) in weightByTerm where unitTerms.contains(term) {
+            for term in orderedTerms where unitTerms.contains(term) {
                 matched.insert(term)
-                mass += weight
+                mass += weightByTerm[term] ?? 0
             }
             guard mass > 0 else { continue }
 
@@ -168,7 +176,9 @@ public struct LexicalEntailmentScorer: SupportScorer {
         var unionTerms: Set<String> = []
         for entry in credited { unionTerms.formUnion(entry.matchedTerms) }
         var unionMass: Double = 0
-        for term in unionTerms { unionMass += weightByTerm[term] ?? 0 }
+        for term in orderedTerms where unionTerms.contains(term) {
+            unionMass += weightByTerm[term] ?? 0
+        }
         var coverage = Safe.ratio(unionMass, totalMass)
 
         // Literal channel. A literal counts as corroborated only by evidence

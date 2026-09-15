@@ -78,8 +78,15 @@ public enum NumericGuard {
             // Mixed token or a dash/slash-joined form such as a date or a SKU.
             return NumericLiteral(canonical: normalized, raw: normalized, kind: .identifier)
         }
-        guard let canonical = canonicalNumber(normalized) else { return nil }
-        return NumericLiteral(canonical: canonical, raw: normalized, kind: .number)
+        if let canonical = canonicalNumber(normalized) {
+            return NumericLiteral(canonical: canonical, raw: normalized, kind: .number)
+        }
+        // A digit-bearing token that is not a single quantity -- a dotted
+        // version like `1.2.3`. It must NOT fall through as "no literal here":
+        // that would let "version 1.2.4" pass unvetoed against a corpus saying
+        // 1.2.3, which is exactly the failure this type exists to stop. It has
+        // no magnitude, so it is matched exactly, as an identifier.
+        return NumericLiteral(canonical: normalized, raw: normalized, kind: .identifier)
     }
 
     /// Canonicalises a pure-digit token purely as a string: no `Double` round

@@ -121,19 +121,14 @@ public enum VerifierCalibration {
             let verified = GroundingContractEngine.evaluate(
                 answer: sample.text,
                 evidence: sample.evidence,
-                policy: GroundingPolicy(
-                    supportThreshold: policy.supportThreshold,
-                    weakSupportThreshold: policy.weakSupportThreshold,
-                    numericTolerance: policy.numericTolerance,
-                    enforcesNumericLiterals: policy.enforcesNumericLiterals,
-                    staleEvidenceHorizonSeconds: policy.staleEvidenceHorizonSeconds,
-                    minimumDistinctSources: policy.minimumDistinctSources,
-                    allowsEvidenceComposition: policy.allowsEvidenceComposition,
-                    // Force annotation so enforcement never hides a verdict:
-                    // calibration measures the *detector*, not the response.
-                    unsupportedClaimAction: .annotate,
-                    maximumRedactionRatio: policy.maximumRedactionRatio
-                ),
+                // The caller's policy is used unmodified. Calibration reads
+                // `verdicts`, and enforcement never edits that array -- it only
+                // decides what text to return -- so the detector's confusion
+                // matrix is independent of the response by construction, not by
+                // an override here. `testCalibrationMatrixIsIndependentOfEnforcement`
+                // pins the second half of that sentence by also asserting the
+                // two policies really do produce different *answers*.
+                policy: policy,
                 decomposer: decomposer,
                 scorer: scorer
             )

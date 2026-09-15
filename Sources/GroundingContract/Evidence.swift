@@ -55,7 +55,8 @@ public struct EvidenceSet: Sendable {
     /// `minimumDistinctSources` contract term.
     public let distinctSourceIDs: Set<String>
 
-    let idf: InverseDocumentFrequency
+    /// IDF weights over this evidence set, for custom scorers.
+    public let idf: InverseDocumentFrequency
     /// Per-unit normalised token sets, index-aligned with `units`.
     let unitTerms: [Set<String>]
     /// Per-unit numeric/identifier literals, index-aligned with `units`.
@@ -79,19 +80,26 @@ public struct EvidenceSet: Sendable {
 
     public var isEmpty: Bool { units.isEmpty }
 
-    /// Bounds-checked accessor. Every internal index into `units` goes through
-    /// this, so no scoring path can subscript out of range.
-    func unit(at index: Int) -> EvidenceUnit? {
+    /// Bounds-checked accessor. Every index into `units` goes through this, so
+    /// no scoring path can subscript out of range.
+    ///
+    /// Public because `SupportScorer` is a public seam: a caller writing a
+    /// custom scorer needs the same guarded access the built-in one uses, not
+    /// a raw array and good intentions.
+    public func unit(at index: Int) -> EvidenceUnit? {
         guard index >= 0, index < units.count else { return nil }
         return units[index]
     }
 
-    func terms(at index: Int) -> Set<String> {
+    /// Normalised content terms of the unit at `index`, or `[]` out of range.
+    public func terms(at index: Int) -> Set<String> {
         guard index >= 0, index < unitTerms.count else { return [] }
         return unitTerms[index]
     }
 
-    func literals(at index: Int) -> Set<String> {
+    /// Canonical numeric/identifier literals of the unit at `index`, or `[]`
+    /// out of range.
+    public func literals(at index: Int) -> Set<String> {
         guard index >= 0, index < unitLiterals.count else { return [] }
         return unitLiterals[index]
     }
