@@ -148,10 +148,16 @@ public struct LexicalEntailmentScorer: SupportScorer {
         }
 
         guard !scored.isEmpty else {
+            // Nothing was credited, so nothing was *checked*. Reporting every
+            // literal in the claim as "uncorroborated" here would be a lie
+            // twice over: it mislabels a stale-evidence block and a
+            // zero-overlap claim as numeric fabrications, and it poisons the
+            // one ledger metric this package tells callers to alert on. The
+            // honest answer is that the literal channel had no opinion.
             return SupportMeasurement(
                 coverage: 0,
                 citations: [],
-                unmatchedLiterals: claimLiterals.map(\.raw),
+                unmatchedLiterals: [],
                 distinctSourceCount: 0,
                 blockedByStaleEvidence: sawStaleCandidate && !sawFreshCandidate
             )

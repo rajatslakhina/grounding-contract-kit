@@ -24,7 +24,12 @@ public struct NumericLiteral: Sendable, Hashable {
 
     /// Normalised form used for matching.
     public let canonical: String
-    /// The token exactly as it appeared, for error messages.
+    /// The normalised token this literal came from, for error messages.
+    ///
+    /// Normalised, not verbatim: the tokeniser lowercases and strips thousands
+    /// separators before classification, so a model that wrote `INC-9115`
+    /// surfaces here as `inc-9115`. That is a display wart, not a matching
+    /// bug, and it is named rather than papered over.
     public let raw: String
     public let kind: Kind
     /// Parsed magnitude, when `canonical` fits a `Double`. `nil` for
@@ -117,8 +122,15 @@ public enum NumericGuard {
     /// Identifiers require an exact canonical match. Numbers may match within
     /// a *relative* tolerance, which defaults to zero: a figure quoted from a
     /// document should be the figure in the document. Tolerance exists for
-    /// callers whose model legitimately rounds ("about 4.2 million" against
-    /// "4,215,000"), and is a deliberate, opt-in loosening of the contract.
+    /// callers whose model legitimately rounds at the same order of magnitude
+    /// -- "about 420 ms" against a source saying 418 ms clears a 1% tolerance
+    /// -- and is a deliberate, opt-in loosening of the contract.
+    ///
+    /// It deliberately does **not** understand scale words. "4.2 million"
+    /// tokenises to the literal `4.2`, which no tolerance short of 0.99999
+    /// will match against `4215000`. Unit and magnitude normalisation is a
+    /// different problem, and pretending a relative epsilon solves it would
+    /// hide a whole class of miss.
     static func isSatisfied(
         _ claimLiteral: NumericLiteral,
         by evidenceLiterals: Set<String>,

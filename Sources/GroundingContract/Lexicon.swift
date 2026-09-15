@@ -89,10 +89,18 @@ public enum Lexicon {
                 let bothDigits = (previous?.isNumber ?? false) && (next?.isNumber ?? false)
 
                 if character == "," {
-                    // Thousands separator between digits is dropped, so
-                    // "4,200" and "4200" are the same literal. Anywhere else
-                    // it ends the token.
-                    if !bothDigits { flush() }
+                    // A comma is dropped ONLY when it is genuinely a thousands
+                    // separator: digits on the left, and exactly three digits
+                    // on the right not followed by another digit. Dropping it
+                    // on any digit-comma-digit pair fabricates literals that
+                    // are not in the text -- "Sections 1,2 and 3" would become
+                    // the figure `12`, and a claim could then be vetoed for a
+                    // number nobody wrote.
+                    if bothDigits, isThousandsGroup(after: index, in: characters) {
+                        // drop it
+                    } else {
+                        flush()
+                    }
                 } else if previousIsAlphanumeric && nextIsAlphanumeric && eitherIsDigit {
                     buffer.append(character)
                 } else {
@@ -105,6 +113,20 @@ public enum Lexicon {
         }
         flush()
         return tokens
+    }
+
+    /// Whether the three characters after `index` are digits and the fourth is
+    /// not, i.e. the comma at `index` separates a thousands group.
+    private static func isThousandsGroup(after index: Int, in characters: [Character]) -> Bool {
+        var offset = 1
+        while offset <= 3 {
+            let position = index + offset
+            guard position < characters.count, characters[position].isNumber else { return false }
+            offset += 1
+        }
+        let following = index + 4
+        guard following < characters.count else { return true }
+        return !characters[following].isNumber
     }
 
     /// Content tokens: tokenised, stopwords removed, single characters dropped

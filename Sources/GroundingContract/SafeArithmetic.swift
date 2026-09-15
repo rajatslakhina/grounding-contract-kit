@@ -4,12 +4,20 @@
 //
 //  Saturating / trap-free arithmetic helpers.
 //
-//  Every numeric operation in this package that could trap at runtime goes
-//  through one of these helpers. Swift's `+`, `*`, `/`, `%` and the
-//  `Int(Double)` initialiser all trap on overflow, division by zero, NaN and
-//  out-of-range conversion. A grounding verifier runs on model output, which
-//  is by definition attacker-shaped input, so none of those traps are
-//  acceptable in the public path.
+//  Swift's `+`, `*`, `/`, `%` and the `Int(Double)` initialiser all trap on
+//  overflow, division by zero, NaN and out-of-range conversion. A grounding
+//  verifier runs on model output, which is by definition attacker-shaped
+//  input, so no such trap is acceptable in the public path.
+//
+//  The rule this package actually follows -- stated precisely, because
+//  "everything goes through `Safe`" is the kind of claim a reviewer checks:
+//  every arithmetic operation whose operands are **derived from caller input**
+//  (evidence counts, IDF mass, coverage ratios, byte totals, thresholds,
+//  sequence numbers) goes through one of these helpers. Loop bookkeeping whose
+//  operands are provably bounded by a collection's own `count` -- `index + 1`
+//  inside a `while index < characters.count`, `storage.count - n` after a
+//  `max(0,)` -- uses plain arithmetic, because wrapping it would add noise
+//  without removing a reachable trap.
 //
 
 /// Trap-free integer and floating-point helpers.
