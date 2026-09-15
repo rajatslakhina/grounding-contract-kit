@@ -207,8 +207,11 @@ final class GroundingContractEngineTests: XCTestCase {
             question: "what is the cache budget?"
         )
 
-        // `.regulated` requires two distinct sources and refuses; the default
-        // policy would have called this same claim `supported`.
+        // `.regulated` requires two distinct sources; only `cache` overlaps
+        // this claim, so the requirement is unmet here. Unmet, not unmeetable
+        // -- `EvidenceCompositionTests.testRegulatedPolicyIsSatisfiable`
+        // shows the same policy answering when two sources corroborate. The
+        // default policy would have called this same claim `supported`.
         XCTAssertEqual(result.outcome, .refused(.unsupportedClaims(1)))
         XCTAssertEqual(result.verdicts.first?.reason, .insufficientDistinctSources)
 

@@ -37,6 +37,27 @@ enum Fixtures {
     rate limited at the client.
     """
 
+    /// A corpus whose units each cover *part* of one claim, from different
+    /// sources. Everything about evidence composition -- crediting more than
+    /// one unit, union-not-sum, the citation cap, the tie-break, and the
+    /// two-distinct-sources requirement -- is unobservable against `corpus`,
+    /// where no claim overlaps more than a single unit.
+    static let budgetText = "The image cache byte budget is 48 MB in production."
+    static let orderingText = "Eviction uses least-recently-used ordering throughout."
+    static let recencyText = "Recency is refreshed on every read of a cached entry."
+
+    static var splitCorpus: EvidenceSet {
+        EvidenceSet(units: [
+            unit("budget", budgetText, name: "Budget note"),
+            unit("ordering", orderingText, source: "wiki.remote", name: "Ordering note"),
+            unit("recency", recencyText, source: "notes.local", name: "Recency note")
+        ])
+    }
+
+    /// One claim that needs `budget` AND `ordering` together.
+    static let twoHopClaim =
+        "The image cache byte budget is 48 MB and eviction uses least-recently-used ordering."
+
     static var corpus: EvidenceSet {
         EvidenceSet(units: [
             unit("cache", cacheText, name: "Caching notes"),
