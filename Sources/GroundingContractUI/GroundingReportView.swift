@@ -27,6 +27,9 @@ public final class GroundingReportModel {
     private let evidence: EvidenceSet
     private let engine: GroundingContractEngine
     private let question: String
+    /// Incremented on every `verify()` entry. A verification that finishes
+    /// after a newer one started is discarded.
+    private var generation = 0
 
     public init(
         question: String,
@@ -42,14 +45,25 @@ public final class GroundingReportModel {
     }
 
     public func verify() async {
+        // `.task(id:)` cancels the previous task, but cancellation is
+        // cooperative and the engine does not poll it -- a cancelled call still
+        // resumes past the actor hop with a result computed under the *old*
+        // policy. Without this token, toggling the contract quickly can leave
+        // the UI showing the previous contract's verdict, which in a demo whose
+        // entire point is one toggle is the worst possible bug.
+        generation += 1
+        let token = generation
+        let requestedPolicy = policy
         isVerifying = true
-        defer { isVerifying = false }
-        result = await engine.verify(
+        let verified = await engine.verify(
             answer: answer,
             evidence: evidence,
             question: question,
-            policy: policy
+            policy: requestedPolicy
         )
+        guard token == generation, !Task.isCancelled else { return }
+        result = verified
+        isVerifying = false
     }
 }
 
